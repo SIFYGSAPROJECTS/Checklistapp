@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "SIFYGSA Checklist Vehicular",
+    "slug": "sifygsa-checklist-app",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0f172a"
+    },
+    "android": {
+      "package": "com.sifygsa.checklistvehicular",
+      "adaptiveIcon": {
+        "backgroundColor": "#0f172a"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_NETWORK_STATE"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Permitir a SIFYGSA Checklist tomar evidencia fotográfica de las unidades."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permitir acceso a fotos de evidencia."
+        }
+      ],
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}
