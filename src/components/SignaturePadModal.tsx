@@ -6,8 +6,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   PanResponder,
-  Dimensions,
 } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 
 export interface SignatureStrokePoint {
@@ -23,6 +23,29 @@ interface Props {
   onConfirm: (signatureJson: string) => void;
 }
 
+/**
+ * Convierte un arreglo de puntos (x, y) en una curva Bezier cúbica/cuadrática
+ * continua, fluida y con puntas redondeadas para simular caligrafía de pluma ejecutiva.
+ */
+function pointsToSvgPath(pts: SignatureStrokePoint[]): string {
+  if (!pts || pts.length === 0) return '';
+  if (pts.length === 1) {
+    return `M ${pts[0].x} ${pts[0].y} L ${pts[0].x + 0.5} ${pts[0].y + 0.5}`;
+  }
+  if (pts.length === 2) {
+    return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
+  }
+
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const midX = (pts[i].x + pts[i + 1].x) / 2;
+    const midY = (pts[i].y + pts[i + 1].y) / 2;
+    d += ` Q ${pts[i].x} ${pts[i].y}, ${midX} ${midY}`;
+  }
+  d += ` L ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
+  return d;
+}
+
 export default function SignaturePadModal({
   visible,
   titulo,
@@ -32,33 +55,67 @@ export default function SignaturePadModal({
 }: Props) {
   const [strokes, setStrokes] = useState<SignatureStrokePoint[][]>([]);
   const [currentStroke, setCurrentStroke] = useState<SignatureStrokePoint[]>([]);
+  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({
+    width: 360,
+    height: 200,
+  });
 
-  // Mantener referencia mutable del stroke actual para evitar pérdida de puntos por re-render
   const currentStrokeRef = useRef<SignatureStrokePoint[]>([]);
 
-  const panResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: (evt) => {
-      const { locationX, locationY } = evt.nativeEvent;
-      const pt = { x: Math.round(locationX), y: Math.round(locationY) };
-      currentStrokeRef.current = [pt];
-      setCurrentStroke([pt]);
-    },
-    onPanResponderMove: (evt) => {
-      const { locationX, locationY } = evt.nativeEvent;
-      const pt = { x: Math.round(locationX), y: Math.round(locationY) };
-      currentStrokeRef.current.push(pt);
-      setCurrentStroke([...currentStrokeRef.current]);
-    },
-    onPanResponderRelease: () => {
-      if (currentStrokeRef.current.length > 0) {
-        setStrokes((prev) => [...prev, currentStrokeRef.current]);
-      }
-      currentStrokeRef.current = [];
-      setCurrentStroke([]);
-    },
-  });
+  // PanResponder configurado con bloqueo de terminación nativa (evita reinicio de trazo)
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      // CRÍTICO: Bloquear peticiones del modal o scrollview para cancelar el gesto táctil
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
+
+      onPanResponderGrant: (evt) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        const pt = { x: Math.round(locationX), y: Math.round(locationY) };
+        currentStrokeRef.current = [pt];
+        setCurrentStroke([pt]);
+      },
+
+      onPanResponderMove: (evt) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        const x = Math.round(locationX);
+        const y = Math.round(locationY);
+        const pts = currentStrokeRef.current;
+
+        if (pts.length > 0) {
+          const last = pts[pts.length - 1];
+          // Filtrar temblores microscópicos (<2.5px) para trazos sedosos y alto rendimiento
+          const dist = Math.hypot(x - last.x, y - last.y);
+          if (dist < 2.5) return;
+        }
+
+        currentStrokeRef.current.push({ x, y });
+        setCurrentStroke([...currentStrokeRef.current]);
+      },
+
+      onPanResponderRelease: () => {
+        if (currentStrokeRef.current.length > 0) {
+          const finished = [...currentStrokeRef.current];
+          setStrokes((prev) => [...prev, finished]);
+        }
+        currentStrokeRef.current = [];
+        setCurrentStroke([]);
+      },
+
+      onPanResponderTerminate: () => {
+        if (currentStrokeRef.current.length > 0) {
+          const finished = [...currentStrokeRef.current];
+          setStrokes((prev) => [...prev, finished]);
+        }
+        currentStrokeRef.current = [];
+        setCurrentStroke([]);
+      },
+    })
+  ).current;
 
   const limpiar = () => {
     currentStrokeRef.current = [];
@@ -70,7 +127,7 @@ export default function SignaturePadModal({
     const allStrokes = currentStroke.length > 0 ? [...strokes, currentStroke] : strokes;
     if (allStrokes.length === 0) return;
 
-    // Calcular Bounding Box real de la firma para centrarla perfectamente en el PDF
+    // Calcular Bounding Box real de la firma para centrado perfecto en PDF
     let minX = 9999;
     let maxX = 0;
     let minY = 9999;
@@ -86,8 +143,8 @@ export default function SignaturePadModal({
     }
 
     const payload = JSON.stringify({
-      w: 360,
-      h: 200,
+      w: canvasSize.width,
+      h: canvasSize.height,
       bbox: { minX, maxX, minY, maxY },
       strokes: allStrokes,
     });
@@ -114,8 +171,37 @@ export default function SignaturePadModal({
             </TouchableOpacity>
           </View>
 
-          {/* Lienzo de Firma con PanResponder */}
-          <View style={styles.canvasArea} {...panResponder.panHandlers}>
+          {/* Área del Lienzo de Firma */}
+          <View
+            style={styles.canvasArea}
+            onLayout={(e) => {
+              const { width, height } = e.nativeEvent.layout;
+              if (width > 0 && height > 0) {
+                setCanvasSize({ width: Math.round(width), height: Math.round(height) });
+              }
+            }}
+          >
+            {/* CAPA 1: Renderizado Vectorial Nativo con react-native-svg (pointerEvents="none" para que jamás interfiera con el toque) */}
+            <View style={StyleSheet.absoluteFill} pointerEvents="none">
+              <Svg width="100%" height="100%">
+                {allStrokes.map((stroke, sIdx) => {
+                  if (stroke.length === 0) return null;
+                  return (
+                    <Path
+                      key={`stroke-${sIdx}`}
+                      d={pointsToSvgPath(stroke)}
+                      stroke="#0f254e"
+                      strokeWidth={3}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      fill="none"
+                    />
+                  );
+                })}
+              </Svg>
+            </View>
+
+            {/* CAPA 2: Mensaje guía si aún no hay trazos */}
             {allStrokes.length === 0 && (
               <View style={styles.placeholderWrap} pointerEvents="none">
                 <Ionicons name="pencil" size={26} color="#94a3b8" />
@@ -125,49 +211,19 @@ export default function SignaturePadModal({
               </View>
             )}
 
-            {/* Renderizado de trazos continuos */}
-            {allStrokes.map((stroke, sIdx) => {
-              if (stroke.length === 0) return null;
-              return (
-                <React.Fragment key={`stroke-${sIdx}`}>
-                  {stroke.map((pt, pIdx) => {
-                    if (pIdx === 0) {
-                      return (
-                        <View
-                          key={`pt-${sIdx}-${pIdx}`}
-                          style={[styles.dot, { left: pt.x - 2, top: pt.y - 2 }]}
-                        />
-                      );
-                    }
-                    const prevPt = stroke[pIdx - 1];
-                    const dx = pt.x - prevPt.x;
-                    const dy = pt.y - prevPt.y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-                    const angle = Math.atan2(dy, dx);
-
-                    return (
-                      <View
-                        key={`line-${sIdx}-${pIdx}`}
-                        style={[
-                          styles.segment,
-                          {
-                            left: prevPt.x,
-                            top: prevPt.y - 1.5,
-                            width: distance,
-                            transform: [{ rotate: `${angle}rad` }],
-                          },
-                        ]}
-                      />
-                    );
-                  })}
-                </React.Fragment>
-              );
-            })}
-
-            {/* Línea guía de firma tipo documento oficial */}
+            {/* CAPA 3: Línea base de firma tipo documento oficial */}
             <View style={styles.signLine} pointerEvents="none">
               <Text style={styles.signLineText}>FIRMA O RÚBRICA</Text>
             </View>
+
+            {/* CAPA 4: SUPERFICIE TÁCTIL DEDICADA Y TRANSPARENTE
+                Completamente limpia sin elementos hijos.
+                Garantiza que locationX y locationY sean 100% continuos y no salgan hilos extraños. */}
+            <View
+              style={StyleSheet.absoluteFill}
+              collapsable={false}
+              {...panResponder.panHandlers}
+            />
           </View>
 
           <View style={styles.footer}>
@@ -248,20 +304,6 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 13,
     fontWeight: '600',
-  },
-  dot: {
-    position: 'absolute',
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#0f172a',
-  },
-  segment: {
-    position: 'absolute',
-    height: 3.5,
-    backgroundColor: '#0f172a',
-    borderRadius: 2,
-    transformOrigin: 'left center',
   },
   signLine: {
     position: 'absolute',
