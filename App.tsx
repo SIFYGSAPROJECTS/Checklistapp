@@ -34,6 +34,8 @@ import {
 } from './src/services/offlineSync';
 import PhasePhotoEvidence from './src/components/PhasePhotoEvidence';
 import SignaturePadModal from './src/components/SignaturePadModal';
+import DatePickerModal from './src/components/DatePickerModal';
+import FuelGaugeSelector, { NivelCombustible } from './src/components/FuelGaugeSelector';
 
 const FASES = [
   { num: 0, titulo: 'Unidad y Vigencias', corto: 'Unidad', icono: 'car-sport' as const },
@@ -67,6 +69,19 @@ export default function App() {
 
   // Modal de firmas
   const [modalFirmaTipo, setModalFirmaTipo] = useState<'RESPONSABLE' | 'INSPECTOR' | null>(null);
+  const [datePickerState, setDatePickerState] = useState<{
+    visible: boolean;
+    field: 'SEGURO' | 'LICENCIA';
+    titulo: string;
+    subtitulo: string;
+    currentDate: string;
+  }>({
+    visible: false,
+    field: 'SEGURO',
+    titulo: '',
+    subtitulo: '',
+    currentDate: '',
+  });
 
   // 1. Cargar datos locales al iniciar y escuchar cambios de conectividad (Auto-Sync Offline -> Online)
   useEffect(() => {
@@ -220,8 +235,23 @@ export default function App() {
   const finalizarYGuardarChecklist = async () => {
     if (!form) return;
 
-    if (!form.kilometraje.trim()) {
-      Alert.alert('Falta Kilometraje', 'Por favor ingresa el kilometraje actual en la Fase 2.');
+    const kmNum = parseInt(form.kilometraje.replace(/\D/g, ''), 10);
+    const kmAnt = vehiculoSeleccionado?.kilometrajeActual || 0;
+
+    if (!form.kilometraje.trim() || isNaN(kmNum) || kmNum <= 0) {
+      Alert.alert(
+        'Falta Kilometraje',
+        'Por favor ingresa los dígitos del odómetro actual en la Fase 3 (Tablero).'
+      );
+      setFaseActual(2);
+      return;
+    }
+
+    if (kmAnt > 0 && kmNum < kmAnt) {
+      Alert.alert(
+        'Kilometraje Inválido',
+        `El kilometraje ingresado (${kmNum.toLocaleString()} km) no puede ser menor al último registrado en la unidad (${kmAnt.toLocaleString()} km). Por favor rectifica el odómetro en el tablero.`
+      );
       setFaseActual(2);
       return;
     }
@@ -716,32 +746,47 @@ export default function App() {
                     />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Vencimiento Seguro (AAAA-MM-DD)</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.vencimientoSeguro}
-                      placeholder="2027-01-20"
-                      placeholderTextColor="#64748b"
-                      onChangeText={(t) => setForm({ ...form, vencimientoSeguro: t })}
-                    />
+                    <Text style={styles.fieldLabel}>Vencimiento Seguro</Text>
+                    <TouchableOpacity
+                      style={styles.datePickerTrigger}
+                      onPress={() =>
+                        setDatePickerState({
+                          visible: true,
+                          field: 'SEGURO',
+                          titulo: 'Vencimiento de Póliza de Seguro',
+                          subtitulo: `Unidad ${form.consecutivo} (${form.placas})`,
+                          currentDate: form.vencimientoSeguro || '',
+                        })
+                      }
+                    >
+                      <Ionicons name="calendar" size={18} color="#fb923c" />
+                      <Text style={[styles.datePickerTriggerText, !form.vencimientoSeguro && styles.datePickerPlaceholder]}>
+                        {form.vencimientoSeguro || 'Elegir en Calendario'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
 
                 <View style={styles.twoColInputs}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Vencimiento Licencia Conductor (AAAA-MM-DD)</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.licenciaManejo.fechaVencimiento}
-                      placeholder="2027-06-15"
-                      placeholderTextColor="#64748b"
-                      onChangeText={(t) =>
-                        setForm({
-                          ...form,
-                          licenciaManejo: { ...form.licenciaManejo, fechaVencimiento: t },
+                    <Text style={styles.fieldLabel}>Vencimiento Licencia Conductor</Text>
+                    <TouchableOpacity
+                      style={styles.datePickerTrigger}
+                      onPress={() =>
+                        setDatePickerState({
+                          visible: true,
+                          field: 'LICENCIA',
+                          titulo: 'Vencimiento de Licencia de Manejo',
+                          subtitulo: `Conductor: ${form.responsable || 'Asignado'}`,
+                          currentDate: form.licenciaManejo.fechaVencimiento || '',
                         })
                       }
-                    />
+                    >
+                      <Ionicons name="calendar" size={18} color="#fb923c" />
+                      <Text style={[styles.datePickerTriggerText, !form.licenciaManejo.fechaVencimiento && styles.datePickerPlaceholder]}>
+                        {form.licenciaManejo.fechaVencimiento || 'Elegir en Calendario'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Bimestre Verificación (Engomado)</Text>
@@ -911,35 +956,95 @@ export default function App() {
           {faseActual === 2 && (
             <View>
               <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>Odómetro (Kilometraje Actual)</Text>
-                <View style={styles.twoColInputs}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>
-                      Kilometraje Actual (Anterior:{' '}
-                      {vehiculoSeleccionado?.kilometrajeActual || 0} km)
+                <View style={styles.cardHeaderRow}>
+                  <Text style={styles.sectionTitle}>Odómetro (Kilometraje Actual)</Text>
+                  <View style={styles.pillAuto}>
+                    <Ionicons name="speedometer" size={14} color="#fb923c" />
+                    <Text style={styles.pillAutoText}>
+                      Anterior: {vehiculoSeleccionado?.kilometrajeActual ? `${vehiculoSeleccionado.kilometrajeActual.toLocaleString()} km` : 'S/N'}
                     </Text>
-                    <TextInput
-                      style={[styles.input, styles.kmInput]}
-                      value={form.kilometraje}
-                      keyboardType="numeric"
-                      placeholder="Ej. 119250"
-                      placeholderTextColor="#64748b"
-                      onChangeText={(t) => setForm({ ...form, kilometraje: t })}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Millas (Opcional)</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.millas}
-                      keyboardType="numeric"
-                      placeholder="N/A"
-                      placeholderTextColor="#64748b"
-                      onChangeText={(t) => setForm({ ...form, millas: t })}
-                    />
                   </View>
                 </View>
+
+                <Text style={styles.helperText}>
+                  Ingresa los dígitos actuales del odómetro. El sistema comprueba que no sea menor al registrado previamente:
+                </Text>
+
+                <View style={styles.kmInputRow}>
+                  <View style={{ flex: 1, position: 'relative' }}>
+                    <TextInput
+                      style={[
+                        styles.input,
+                        styles.kmInputLarge,
+                        Boolean(form.kilometraje.trim().length > 0 && (vehiculoSeleccionado?.kilometrajeActual || 0) > 0 && parseInt(form.kilometraje.replace(/\D/g, ''), 10) < (vehiculoSeleccionado?.kilometrajeActual || 0)) && styles.inputErrorBorder,
+                        Boolean(form.kilometraje.trim().length > 0 && parseInt(form.kilometraje.replace(/\D/g, ''), 10) >= (vehiculoSeleccionado?.kilometrajeActual || 0)) && styles.inputSuccessBorder,
+                      ]}
+                      value={form.kilometraje}
+                      keyboardType="number-pad"
+                      placeholder={`Ej. ${(vehiculoSeleccionado?.kilometrajeActual || 100000) + 150}`}
+                      placeholderTextColor="#64748b"
+                      onChangeText={(t) => {
+                        const soloNum = t.replace(/\D/g, '');
+                        setForm({ ...form, kilometraje: soloNum });
+                      }}
+                    />
+                    {form.kilometraje.length > 0 && (
+                      <TouchableOpacity
+                        style={styles.kmClearBtn}
+                        onPress={() => setForm({ ...form, kilometraje: '' })}
+                      >
+                        <Ionicons name="close-circle" size={20} color="#94a3b8" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  <View style={styles.kmQuickAddRow}>
+                    <TouchableOpacity
+                      style={styles.kmQuickBtn}
+                      onPress={() => {
+                        const base = vehiculoSeleccionado?.kilometrajeActual || 0;
+                        setForm({ ...form, kilometraje: String(base + 100) });
+                      }}
+                    >
+                      <Text style={styles.kmQuickBtnText}>+100 km</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.kmQuickBtn}
+                      onPress={() => {
+                        const base = vehiculoSeleccionado?.kilometrajeActual || 0;
+                        setForm({ ...form, kilometraje: String(base + 500) });
+                      }}
+                    >
+                      <Text style={styles.kmQuickBtnText}>+500 km</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Comprobación de Kilometraje */}
+                {Boolean(form.kilometraje.trim().length > 0 && (vehiculoSeleccionado?.kilometrajeActual || 0) > 0 && parseInt(form.kilometraje.replace(/\D/g, ''), 10) < (vehiculoSeleccionado?.kilometrajeActual || 0)) && (
+                  <View style={styles.kmErrorBanner}>
+                    <Ionicons name="alert-circle" size={20} color="#ef4444" />
+                    <Text style={styles.kmErrorText}>
+                      ⚠️ Error: El kilometraje ingresado ({Number(form.kilometraje).toLocaleString()} km) es menor al último registrado ({vehiculoSeleccionado?.kilometrajeActual?.toLocaleString()} km). No se puede registrar un kilometraje menor.
+                    </Text>
+                  </View>
+                )}
+
+                {Boolean(form.kilometraje.trim().length > 0 && parseInt(form.kilometraje.replace(/\D/g, ''), 10) >= (vehiculoSeleccionado?.kilometrajeActual || 0)) && (
+                  <View style={styles.kmSuccessBanner}>
+                    <Ionicons name="checkmark-circle" size={20} color="#10b981" />
+                    <Text style={styles.kmSuccessText}>
+                      ✅ Kilometraje comprobado: +{(Number(form.kilometraje) - (vehiculoSeleccionado?.kilometrajeActual || 0)).toLocaleString()} km recorridos.
+                    </Text>
+                  </View>
+                )}
               </View>
+
+              {/* Medidor Gráfico de Gasolina */}
+              <FuelGaugeSelector
+                value={form.combustible || '1/2'}
+                onChange={(val) => setForm({ ...form, combustible: val })}
+              />
 
               <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>Funcionamiento de Cabina</Text>
@@ -1422,7 +1527,25 @@ export default function App() {
           </View>
         </ScrollView>
 
-        <SignaturePadModal
+        <DatePickerModal
+        visible={datePickerState.visible}
+        titulo={datePickerState.titulo}
+        subtitulo={datePickerState.subtitulo}
+        fechaActualISO={datePickerState.currentDate}
+        onClose={() => setDatePickerState((prev) => ({ ...prev, visible: false }))}
+        onSelectDate={(fechaISO) => {
+          if (!form) return;
+          if (datePickerState.field === 'SEGURO') {
+            setForm({ ...form, vencimientoSeguro: fechaISO });
+          } else if (datePickerState.field === 'LICENCIA') {
+            setForm({
+              ...form,
+              licenciaManejo: { ...form.licenciaManejo, fechaVencimiento: fechaISO },
+            });
+          }
+        }}
+      />
+      <SignaturePadModal
           visible={modalFirmaTipo !== null}
           titulo={
             modalFirmaTipo === 'RESPONSABLE'
@@ -1785,6 +1908,105 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  datePickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#0f172a',
+    borderWidth: 1.5,
+    borderColor: '#fb923c',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginTop: 4,
+  },
+  datePickerTriggerText: {
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  datePickerPlaceholder: {
+    color: '#94a3b8',
+    fontWeight: 'normal',
+  },
+  kmInputRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  kmInputLarge: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#f8fafc',
+    letterSpacing: 1,
+    paddingRight: 36,
+  },
+  kmClearBtn: {
+    position: 'absolute',
+    right: 12,
+    top: 14,
+  },
+  kmQuickAddRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  kmQuickBtn: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#475569',
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  kmQuickBtnText: {
+    color: '#38bdf8',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  kmErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  kmErrorText: {
+    color: '#fca5a5',
+    fontSize: 12,
+    fontWeight: '700',
+    flex: 1,
+  },
+  kmSuccessBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: '#10b981',
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  kmSuccessText: {
+    color: '#6ee7b7',
+    fontSize: 12,
+    fontWeight: '700',
+    flex: 1,
+  },
+  inputErrorBorder: {
+    borderColor: '#ef4444',
+    borderWidth: 2,
+  },
+  inputSuccessBorder: {
+    borderColor: '#10b981',
+    borderWidth: 2,
+  },
+
   safeArea: {
     flex: 1,
     backgroundColor: '#0f172a',

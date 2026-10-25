@@ -61,6 +61,7 @@ export interface ChecklistFormState {
   verificacionVehicular: string;
   kilometraje: string;
   millas: string;
+  combustible: 'VACIO' | '1/4' | '1/2' | '3/4' | 'LLENO';
   licenciaManejo: {
     tiene: SiNo;
     fechaVencimiento: string;
@@ -165,6 +166,7 @@ export function crearChecklistInicial(vehiculo: VehiculoCatalogo, inspectorNombr
     verificacionVehicular: vehiculo.bimestreVerificacion || 'N/A',
     kilometraje: vehiculo.kilometrajeActual ? String(vehiculo.kilometrajeActual) : '',
     millas: '',
+    combustible: (prev as any)?.combustible || '1/2',
     licenciaManejo: {
       tiene: prev?.licenciaManejo?.tiene || 'SI',
       fechaVencimiento: vehiculo.vencimientoLicencia || prev?.licenciaManejo?.fechaVencimiento || '',

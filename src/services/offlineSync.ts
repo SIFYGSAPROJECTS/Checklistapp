@@ -29,7 +29,11 @@ async function fetchConTimeout(
 
 export async function obtenerServerUrl(): Promise<string> {
   const saved = await AsyncStorage.getItem(STORAGE_KEYS.SERVER_URL);
-  return saved ? saved.replace(/\/+$/, '') : FALLBACK_LOCAL_SERVER_URL;
+  if (!saved || saved.includes('localhost') || saved.includes('127.0.0.1')) {
+    await AsyncStorage.setItem(STORAGE_KEYS.SERVER_URL, DEFAULT_SERVER_URL);
+    return DEFAULT_SERVER_URL;
+  }
+  return saved.replace(/\/+$/, '');
 }
 
 export async function guardarServerUrl(url: string): Promise<void> {
@@ -80,9 +84,9 @@ export async function sincronizarCatalogoDesdeServidor(): Promise<{
   const configuredUrl = await obtenerServerUrl();
   const urlsToTry = Array.from(
     new Set([
-      FALLBACK_LOCAL_SERVER_URL,
       configuredUrl,
       DEFAULT_SERVER_URL,
+      FALLBACK_LOCAL_SERVER_URL,
     ])
   );
 
@@ -207,9 +211,9 @@ export async function sincronizarPendientesConServidor(
     const configuredUrl = await obtenerServerUrl();
     const urlsToTry = Array.from(
       new Set([
-        FALLBACK_LOCAL_SERVER_URL,
         configuredUrl,
         DEFAULT_SERVER_URL,
+        FALLBACK_LOCAL_SERVER_URL,
       ])
     );
     const cola = await obtenerColaChecklists();
