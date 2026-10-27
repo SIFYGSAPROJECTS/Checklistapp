@@ -77,6 +77,8 @@ export interface ChecklistFormState {
     polizaGarantia: SiNo;
     manualPropietario: SiNo;
     dadoSeguridad: SiNo;
+    papeletaVerificacion?: SiNo;
+    tenencia?: SiNo;
   };
   funciona: {
     claxon: SiNo;
@@ -182,6 +184,8 @@ export function crearChecklistInicial(vehiculo: VehiculoCatalogo, inspectorNombr
       polizaGarantia: prev?.inventario?.polizaGarantia || 'SI',
       manualPropietario: prev?.inventario?.manualPropietario || 'SI',
       dadoSeguridad: prev?.inventario?.dadoSeguridad || 'SI',
+      papeletaVerificacion: prev?.inventario?.papeletaVerificacion || 'SI',
+      tenencia: prev?.inventario?.tenencia || 'SI',
     },
     funciona: {
       claxon: prev?.funciona?.claxon || 'SI',

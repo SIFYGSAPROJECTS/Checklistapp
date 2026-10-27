@@ -812,6 +812,33 @@ export default function App() {
                   form.polizaVigente,
                   (val) => setForm({ ...form, polizaVigente: val })
                 )}
+                {renderSiNoRow(
+                  '¿Póliza de Garantía de la unidad?',
+                  form.inventario.polizaGarantia,
+                  (val) =>
+                    setForm({
+                      ...form,
+                      inventario: { ...form.inventario, polizaGarantia: val },
+                    })
+                )}
+                {renderSiNoRow(
+                  '¿Papeleta de Verificación Vehicular en la unidad?',
+                  form.inventario.papeletaVerificacion || 'SI',
+                  (val) =>
+                    setForm({
+                      ...form,
+                      inventario: { ...form.inventario, papeletaVerificacion: val },
+                    })
+                )}
+                {renderSiNoRow(
+                  '¿Comprobante de Tenencia vigente en la unidad?',
+                  form.inventario.tenencia || 'SI',
+                  (val) =>
+                    setForm({
+                      ...form,
+                      inventario: { ...form.inventario, tenencia: val },
+                    })
+                )}
               </View>
 
               <PhasePhotoEvidence
@@ -819,6 +846,9 @@ export default function App() {
                 etiquetasSugeridas={[
                   'Tarjeta de Circulación',
                   'Póliza de Seguro',
+                  'Póliza de Garantía de la Unidad',
+                  'Papeleta de Verificación',
+                  'Tenencia',
                   'Licencia de Manejo',
                 ]}
                 fotos={form.fotos}
@@ -842,6 +872,7 @@ export default function App() {
                       setForm({
                         ...form,
                         inventario: {
+                          ...form.inventario,
                           tapetes: 'SI',
                           estereo: 'SI',
                           pantalla: 'SI',
