@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   SesionPersistente,
   iniciarSesionCorporativa,
+  solicitarPinRecuperacionMovil,
 } from '../services/authService';
 import { guardarServerUrl } from '../services/offlineSync';
 import { InfoActualizacionApp } from '../services/appUpdater';
@@ -49,7 +50,30 @@ export default function LoginScreen({
   const [mostrarConfigUrl, setMostrarConfigUrl] = useState(false);
   const [serverUrl, setServerUrl] = useState(initialServerUrl || 'https://cloud.sifygsa.com');
   const [cargando, setCargando] = useState(false);
+  const [enviandoPin, setEnviandoPin] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoPinMsg, setInfoPinMsg] = useState<string | null>(null);
+
+  const handleRecuperarPin = async () => {
+    setErrorMsg(null);
+    setInfoPinMsg(null);
+    if (!email.trim()) {
+      setErrorMsg('Escribe primero tu correo corporativo arriba para enviarte un PIN temporal.');
+      return;
+    }
+    setEnviandoPin(true);
+    try {
+      const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
+      const res = await solicitarPinRecuperacionMovil(email, cleanUrl);
+      if (res.ok) {
+        setInfoPinMsg(res.mensaje);
+      } else {
+        setErrorMsg(res.mensaje);
+      }
+    } finally {
+      setEnviandoPin(false);
+    }
+  };
 
   const handleLogin = async () => {
     setErrorMsg(null);
@@ -193,6 +217,13 @@ export default function LoginScreen({
               </View>
             </View>
 
+            {infoPinMsg ? (
+              <View style={styles.queueSafeBox}>
+                <Ionicons name="key-outline" size={18} color="#34d399" />
+                <Text style={styles.queueSafeText}>{infoPinMsg}</Text>
+              </View>
+            ) : null}
+
             {errorMsg ? (
               <View style={styles.errorBox}>
                 <Ionicons name="alert-circle" size={18} color="#f87171" />
@@ -216,6 +247,19 @@ export default function LoginScreen({
                   <Text style={styles.loginBtnText}>Iniciar Sesión</Text>
                 </>
               )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.forgotBtn}
+              onPress={handleRecuperarPin}
+              disabled={cargando || enviandoPin}
+            >
+              <Ionicons name="key-outline" size={14} color="#38bdf8" />
+              <Text style={styles.forgotBtnText}>
+                {enviandoPin
+                  ? 'Enviando PIN temporal al correo...'
+                  : '¿Olvidaste tu contraseña? Recibir PIN temporal de acceso'}
+              </Text>
             </TouchableOpacity>
 
             {/* Configuración avanzada opcional de servidor */}
@@ -431,6 +475,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  forgotBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 14,
+    paddingVertical: 4,
+  },
+  forgotBtnText: {
+    color: '#38bdf8',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   advToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -469,3 +526,4 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
 });
+

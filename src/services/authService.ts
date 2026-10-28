@@ -218,6 +218,63 @@ export async function verificarVigenciaSesionRemota(): Promise<{
 }
 
 /**
+ * Solicita un PIN temporal de 6 dígitos al correo corporativo en caso de olvido de contraseña.
+ * Ese PIN se ingresa directamente en el campo de contraseña del Login.
+ */
+export async function solicitarPinRecuperacionMovil(
+  email: string,
+  customServerUrl?: string
+): Promise<{ ok: boolean; mensaje: string }> {
+  const configuredUrl = customServerUrl?.trim()
+    ? customServerUrl.trim().replace(/\/+$/, '')
+    : await obtenerServerUrl();
+
+  const urlsToTry = Array.from(
+    new Set([configuredUrl, DEFAULT_SERVER_URL, FALLBACK_LOCAL_SERVER_URL])
+  );
+
+  for (const baseUrl of urlsToTry) {
+    try {
+      const res = await fetchConTimeout(
+        `${baseUrl}/api/mobile/reset-password`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ email: email.trim().toLowerCase() }),
+        },
+        10000
+      );
+
+      const data = await res.json().catch(() => null);
+      if (res.status === 429 || res.status === 400) {
+        return {
+          ok: false,
+          mensaje: data?.error || 'Debes esperar antes de solicitar otro PIN.',
+        };
+      }
+
+      if (res.ok && data?.success) {
+        return {
+          ok: true,
+          mensaje:
+            'Te enviamos un PIN temporal de 6 dígitos a tu correo. Escríbelo en el campo "Contraseña" (válido por 10 minutos).',
+        };
+      }
+    } catch {
+      // probar siguiente URL
+    }
+  }
+
+  return {
+    ok: false,
+    mensaje: 'No hubo conexión con el servidor. También puedes pedir a Administración que restablezca tu clave en SIFYGSAFLEET.',
+  };
+}
+
+/**
  * Elimina las credenciales seguras del dispositivo y purga el catálogo sensible en caché.
  * Nota: conserva la cola de checklists pendientes a menos que se solicite purga total.
  */
@@ -227,3 +284,4 @@ export async function cerrarSesionDispositivo(): Promise<void> {
   await AsyncStorage.removeItem('@sifygsa_catalogo_vehiculos_v1');
   await AsyncStorage.removeItem('@sifygsa_last_catalog_sync_v1');
 }
+
