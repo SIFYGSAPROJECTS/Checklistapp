@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ChecklistFormState, VehiculoCatalogo } from '../types/checklist';
 import { VEHICULOS_SEED } from '../utils/vigencias';
+import { obtenerTokenGuardado } from './authService';
 
 const STORAGE_KEYS = {
   CATALOGO_VEHICULOS: '@sifygsa_catalogo_vehiculos_v1',
@@ -42,7 +43,7 @@ export async function guardarServerUrl(url: string): Promise<void> {
 
 export async function obtenerInspectorActivo(): Promise<string> {
   const saved = await AsyncStorage.getItem(STORAGE_KEYS.INSPECTOR_NOMBRE);
-  return saved || 'HERNAN OVALLES GARCIA';
+  return saved || '';
 }
 
 export async function guardarInspectorActivo(nombre: string): Promise<void> {
@@ -51,7 +52,7 @@ export async function guardarInspectorActivo(nombre: string): Promise<void> {
 
 /**
  * Obtiene el catálogo de vehículos desde caché local (Offline-First).
- * Si aún no se ha sincronizado nunca, devuelve las unidades semilla de tu hoja de revisión.
+ * Solo devuelve datos si el usuario ya inició sesión y descargó el catálogo autorizado.
  */
 export async function obtenerCatalogoLocal(): Promise<{
   vehiculos: VehiculoCatalogo[];
@@ -74,13 +75,25 @@ export async function obtenerCatalogoLocal(): Promise<{
 
 /**
  * Descarga el catálogo actualizado desde SIFYGSAFLEET (/api/mobile/catalogo)
- * y lo persiste localmente para uso sin internet.
+ * enviando el token corporativo persistente y lo persiste localmente para uso sin internet.
  */
 export async function sincronizarCatalogoDesdeServidor(): Promise<{
   ok: boolean;
+  authRevocada?: boolean;
   vehiculos: VehiculoCatalogo[];
   mensaje: string;
 }> {
+  const token = await obtenerTokenGuardado();
+  if (!token) {
+    const local = await obtenerCatalogoLocal();
+    return {
+      ok: false,
+      authRevocada: true,
+      vehiculos: local.vehiculos,
+      mensaje: 'Inicia sesión para descargar el catálogo corporativo.',
+    };
+  }
+
   const configuredUrl = await obtenerServerUrl();
   const urlsToTry = Array.from(
     new Set([
@@ -96,10 +109,24 @@ export async function sincronizarCatalogoDesdeServidor(): Promise<{
         `${baseUrl}/api/mobile/catalogo`,
         {
           method: 'GET',
-          headers: { Accept: 'application/json' },
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
         },
-        6000
+        8000
       );
+
+      if (res.status === 401 || res.status === 403) {
+        const errData = await res.json().catch(() => null);
+        const local = await obtenerCatalogoLocal();
+        return {
+          ok: false,
+          authRevocada: true,
+          vehiculos: local.vehiculos,
+          mensaje: errData?.error || 'Tu sesión expiró o fue revocada. Inicia sesión nuevamente.',
+        };
+      }
 
       if (!res.ok) continue;
 
@@ -198,7 +225,7 @@ let sincronizandoEnCurso = false;
 export async function sincronizarPendientesConServidor(
   onProgress?: (msg: string) => void,
   onColaChange?: (cola: ChecklistFormState[]) => void
-): Promise<{ subidos: number; pendientes: number; errores: number }> {
+): Promise<{ subidos: number; pendientes: number; errores: number; authRevocada?: boolean }> {
   if (sincronizandoEnCurso) {
     return { subidos: 0, pendientes: 0, errores: 0 };
   }
@@ -208,6 +235,16 @@ export async function sincronizarPendientesConServidor(
   let errores = 0;
 
   try {
+    const token = await obtenerTokenGuardado();
+    const cola = await obtenerColaChecklists();
+    const porSubir = cola.filter(
+      (c) => c.estadoSync === 'PENDIENTE_SUBIR' || c.estadoSync === 'ERROR'
+    );
+
+    if (!token) {
+      return { subidos: 0, pendientes: porSubir.length, errores: 0, authRevocada: true };
+    }
+
     const configuredUrl = await obtenerServerUrl();
     const urlsToTry = Array.from(
       new Set([
@@ -216,13 +253,10 @@ export async function sincronizarPendientesConServidor(
         FALLBACK_LOCAL_SERVER_URL,
       ])
     );
-    const cola = await obtenerColaChecklists();
-    const porSubir = cola.filter(
-      (c) => c.estadoSync === 'PENDIENTE_SUBIR' || c.estadoSync === 'ERROR'
-    );
 
     for (const item of porSubir) {
       let exitoItem = false;
+      let sesionRevocada = false;
       let ultimoError = 'Sin conexión con el servidor Easypanel';
 
       for (const baseUrl of urlsToTry) {
@@ -233,11 +267,21 @@ export async function sincronizarPendientesConServidor(
             `${baseUrl}/api/mobile/sync-checklist`,
             {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
               body: JSON.stringify(item),
             },
             20000
           );
+
+          if (response.status === 401 || response.status === 403) {
+            const errData = await response.json().catch(() => null);
+            ultimoError = errData?.error || 'Sesión expirada o revocada. Inicia sesión nuevamente.';
+            sesionRevocada = true;
+            break;
+          }
 
           if (!response.ok) {
             const errData = await response.json().catch(() => null);
@@ -273,6 +317,12 @@ export async function sincronizarPendientesConServidor(
         } catch (err: any) {
           ultimoError = err?.message || 'Error de conexión';
         }
+      }
+
+      if (sesionRevocada) {
+        const colaFinal = await obtenerColaChecklists();
+        const pendientes = colaFinal.filter((c) => c.estadoSync === 'PENDIENTE_SUBIR').length;
+        return { subidos, pendientes, errores: errores + 1, authRevocada: true };
       }
 
       if (!exitoItem) {

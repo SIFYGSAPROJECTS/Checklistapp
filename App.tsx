@@ -10,6 +10,7 @@ import {
   Alert,
   StatusBar,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { Ionicons } from '@expo/vector-icons';
@@ -32,10 +33,23 @@ import {
   obtenerInspectorActivo,
   guardarInspectorActivo,
 } from './src/services/offlineSync';
+import {
+  SesionPersistente,
+  obtenerSesionPersistente,
+  verificarVigenciaSesionRemota,
+  cerrarSesionDispositivo,
+} from './src/services/authService';
+import {
+  InfoActualizacionApp,
+  obtenerVersionActualApp,
+  buscarActualizacionServidor,
+} from './src/services/appUpdater';
 import PhasePhotoEvidence from './src/components/PhasePhotoEvidence';
 import SignaturePadModal from './src/components/SignaturePadModal';
 import DatePickerModal from './src/components/DatePickerModal';
 import FuelGaugeSelector, { NivelCombustible } from './src/components/FuelGaugeSelector';
+import LoginScreen from './src/components/LoginScreen';
+import UpdateBanner from './src/components/UpdateBanner';
 
 const FASES = [
   { num: 0, titulo: 'Unidad y Vigencias', corto: 'Unidad', icono: 'car-sport' as const },
@@ -48,6 +62,16 @@ const FASES = [
 
 export default function App() {
   const [vista, setVista] = useState<'HOME' | 'WIZARD' | 'SETTINGS'>('HOME');
+  const [cargandoSesion, setCargandoSesion] = useState<boolean>(true);
+  const [sesionActiva, setSesionActiva] = useState<SesionPersistente | null>(null);
+  const [motivoRelogin, setMotivoRelogin] = useState<string | null>(null);
+  const [ultimoEmailUsado, setUltimoEmailUsado] = useState<string>('');
+
+  // Auto-actualizador estilo Antigravity
+  const versionActual = useMemo(() => obtenerVersionActualApp(), []);
+  const [updateRelease, setUpdateRelease] = useState<InfoActualizacionApp | null>(null);
+  const [updateOculto, setUpdateOculto] = useState<boolean>(false);
+
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [vehiculos, setVehiculos] = useState<VehiculoCatalogo[]>([]);
   const [colaLocal, setColaLocal] = useState<ChecklistFormState[]>([]);
@@ -60,7 +84,7 @@ export default function App() {
 
   // Configuración
   const [serverUrlInput, setServerUrlInput] = useState('');
-  const [inspectorInput, setInspectorInput] = useState('HERNAN OVALLES GARCIA');
+  const [inspectorInput, setInspectorInput] = useState('');
 
   // Estado del Wizard activo
   const [faseActual, setFaseActual] = useState<number>(0);
@@ -83,6 +107,32 @@ export default function App() {
     currentDate: '',
   });
 
+  const revisarActualizaciones = async (mostrarAlertaSiAlDia = false) => {
+    const info = await buscarActualizacionServidor();
+    if (info.hayActualizacion && info.release) {
+      setUpdateRelease(info.release);
+      setUpdateOculto(false);
+    } else {
+      setUpdateRelease(null);
+      if (mostrarAlertaSiAlDia) {
+        Alert.alert(
+          'Aplicación al día',
+          `Ya cuentas con la versión más reciente instalada (v${versionActual}).`
+        );
+      }
+    }
+  };
+
+  const manejarSesionRevocada = async (mensaje?: string) => {
+    await cerrarSesionDispositivo();
+    setVehiculos([]);
+    setSesionActiva(null);
+    setVista('HOME');
+    setMotivoRelogin(
+      mensaje || 'Tu sesión expiró o fue revocada en el servidor. Inicia sesión nuevamente.'
+    );
+  };
+
   // 1. Cargar datos locales al iniciar y escuchar cambios de conectividad (Auto-Sync Offline -> Online)
   useEffect(() => {
     inicializarApp();
@@ -91,7 +141,12 @@ export default function App() {
       const conectado = Boolean(state.isConnected && state.isInternetReachable !== false);
       setIsOnline(conectado);
       if (conectado) {
-        ejecutarAutoSync();
+        revisarActualizaciones();
+        obtenerSesionPersistente().then((ses) => {
+          if (ses) {
+            ejecutarAutoSync();
+          }
+        });
       }
     });
 
@@ -101,17 +156,46 @@ export default function App() {
   const inicializarApp = async () => {
     const url = await obtenerServerUrl();
     const insp = await obtenerInspectorActivo();
+    const cola = await obtenerColaChecklists();
+
     setServerUrlInput(url);
     setInspectorInput(insp);
+    setColaLocal(cola);
+
+    // Buscar actualizaciones en segundo plano
+    revisarActualizaciones();
+
+    // Verificar si ya existe sesión persistente guardada en Keystore
+    const sesion = await obtenerSesionPersistente();
+    if (!sesion) {
+      setCargandoSesion(false);
+      return;
+    }
+
+    setSesionActiva(sesion);
+    setUltimoEmailUsado(sesion.user.email);
+    setInspectorInput(sesion.user.nombreCompleto || insp);
 
     const localCat = await obtenerCatalogoLocal();
     setVehiculos(localCat.vehiculos);
+    setCargandoSesion(false);
 
-    const cola = await obtenerColaChecklists();
-    setColaLocal(cola);
+    // Validar vigencia de sesión y actualizar catálogo desde Easypanel en segundo plano
+    const estadoRemoto = await verificarVigenciaSesionRemota();
+    if (estadoRemoto.revocada) {
+      await manejarSesionRevocada(estadoRemoto.motivo);
+      return;
+    }
+    if (estadoRemoto.userActualizado) {
+      setSesionActiva({ token: sesion.token, user: estadoRemoto.userActualizado });
+      setInspectorInput(estadoRemoto.userActualizado.nombreCompleto);
+    }
 
-    // Intentar actualizar catálogo desde Easypanel en segundo plano
     const resCat = await sincronizarCatalogoDesdeServidor();
+    if (resCat.authRevocada) {
+      await manejarSesionRevocada(resCat.mensaje);
+      return;
+    }
     setVehiculos(resCat.vehiculos);
     setSyncMsg(resCat.mensaje);
 
@@ -119,9 +203,29 @@ export default function App() {
     await ejecutarAutoSync();
   };
 
+  const handleLoginSuccess = async (nuevaSesion: SesionPersistente, urlUsada: string) => {
+    setSesionActiva(nuevaSesion);
+    setUltimoEmailUsado(nuevaSesion.user.email);
+    setMotivoRelogin(null);
+    setServerUrlInput(urlUsada);
+    setInspectorInput(nuevaSesion.user.nombreCompleto);
+    setVista('HOME');
+
+    setSincronizando(true);
+    setSyncMsg('Descargando catálogo corporativo de unidades...');
+    const resCat = await sincronizarCatalogoDesdeServidor();
+    setVehiculos(resCat.vehiculos);
+    setSyncMsg(resCat.mensaje);
+    setSincronizando(false);
+
+    await ejecutarAutoSync();
+  };
+
   const ejecutarAutoSync = async () => {
     const cola = await obtenerColaChecklists();
-    const hayPendientes = cola.some((c) => c.estadoSync === 'PENDIENTE_SUBIR');
+    const hayPendientes = cola.some(
+      (c) => c.estadoSync === 'PENDIENTE_SUBIR' || c.estadoSync === 'ERROR'
+    );
     if (!hayPendientes) return;
 
     setSincronizando(true);
@@ -133,6 +237,13 @@ export default function App() {
     setColaLocal(nuevaCola);
     setSincronizando(false);
 
+    if (res.authRevocada) {
+      await manejarSesionRevocada(
+        'Tu sesión fue revocada o expiró. Inicia sesión nuevamente para subir tus checklists pendientes.'
+      );
+      return;
+    }
+
     if (res.subidos > 0) {
       setSyncMsg(`✅ ${res.subidos} checklist(s) subidos automáticamente a MinIO y PostgreSQL`);
     } else if (res.pendientes > 0) {
@@ -143,7 +254,13 @@ export default function App() {
   const handleManualSync = async () => {
     setSincronizando(true);
     setSyncMsg('Sincronizando catálogo y checklists pendientes con Easypanel...');
+    await revisarActualizaciones();
     const cat = await sincronizarCatalogoDesdeServidor();
+    if (cat.authRevocada) {
+      setSincronizando(false);
+      await manejarSesionRevocada(cat.mensaje);
+      return;
+    }
     setVehiculos(cat.vehiculos);
     const syncRes = await sincronizarPendientesConServidor(
       (m) => setSyncMsg(m),
@@ -152,6 +269,11 @@ export default function App() {
     const nuevaCola = await obtenerColaChecklists();
     setColaLocal(nuevaCola);
     setSincronizando(false);
+
+    if (syncRes.authRevocada) {
+      await manejarSesionRevocada();
+      return;
+    }
 
     if (syncRes.subidos > 0) {
       Alert.alert(
@@ -201,7 +323,11 @@ export default function App() {
   }, [vehiculos, busquedaWizard]);
 
   const iniciarChecklistParaVehiculo = (v: VehiculoCatalogo) => {
-    const nuevo = crearChecklistInicial(v, inspectorInput);
+    const nuevo = crearChecklistInicial(
+      v,
+      inspectorInput || sesionActiva?.user.nombreCompleto || '',
+      sesionActiva?.user.email || ''
+    );
     setVehiculoSeleccionado(v);
     setForm(nuevo);
     setBusquedaWizard('');
@@ -397,9 +523,47 @@ export default function App() {
   );
 
   // ============================================================================
-  // VISTA CONFIGURACIÓN DE SERVIDOR EASYPANEL
+  // PANTALLA DE CARGA INICIAL / CANDADO DE SESIÓN CORPORATIVA PERSISTENTE
+  // ============================================================================
+  if (cargandoSesion) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
+        <ActivityIndicator size="large" color="#38bdf8" />
+        <Text style={{ color: '#94a3b8', marginTop: 12, fontSize: 13 }}>
+          Cargando sesión segura SIFYGSA...
+        </Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (!sesionActiva) {
+    const pendientesSinSubir = colaLocal.filter(
+      (c) => c.estadoSync === 'PENDIENTE_SUBIR' || c.estadoSync === 'BORRADOR' || c.estadoSync === 'ERROR'
+    ).length;
+
+    return (
+      <LoginScreen
+        isOnline={isOnline}
+        initialServerUrl={serverUrlInput}
+        initialEmail={ultimoEmailUsado}
+        motivoRelogin={motivoRelogin}
+        pendientesEnCola={pendientesSinSubir}
+        versionInstalada={versionActual}
+        updateRelease={updateRelease}
+        onLoginSuccess={handleLoginSuccess}
+      />
+    );
+  }
+
+  // ============================================================================
+  // VISTA CONFIGURACIÓN DE SERVIDOR, SESIÓN Y ACTUALIZACIONES
   // ============================================================================
   if (vista === 'SETTINGS') {
+    const pendientesCerrar = colaLocal.filter(
+      (c) => c.estadoSync === 'PENDIENTE_SUBIR' || c.estadoSync === 'BORRADOR' || c.estadoSync === 'ERROR'
+    ).length;
+
     return (
       <SafeAreaView style={styles.safeArea}>
         <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
@@ -408,11 +572,87 @@ export default function App() {
             <Ionicons name="arrow-back" size={22} color="#f8fafc" />
             <Text style={styles.backBtnText}>Volver</Text>
           </TouchableOpacity>
-          <Text style={styles.topBarTitle}>Conexión con Servidor SIFYGSAFLEET</Text>
+          <Text style={styles.topBarTitle}>Cuenta, Versión y Servidor</Text>
           <View style={{ width: 80 }} />
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent}>
+          {/* Tarjeta de Sesión Corporativa Activa */}
+          <View style={styles.sectionCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <Ionicons name="shield-checkmark" size={22} color="#10b981" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionTitle}>{sesionActiva.user.nombreCompleto}</Text>
+                <Text style={styles.helperText}>
+                  {sesionActiva.user.email} • Rol: {sesionActiva.user.rol}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.helperText}>
+              Sesión persistente activa cifrada en este dispositivo. Tus checklists se subirán automáticamente en cuanto haya conexión.
+            </Text>
+
+            <TouchableOpacity
+              style={[
+                styles.primaryBtn,
+                { marginTop: 14, backgroundColor: '#b91c1c' },
+              ]}
+              onPress={() => {
+                const avisoExtra =
+                  pendientesCerrar > 0
+                    ? `\n\nNota: Tienes ${pendientesCerrar} checklist(s) pendientes o en borrador guardados en este dispositivo (se conservarán para cuando vuelvas a iniciar sesión).`
+                    : '';
+                Alert.alert(
+                  'Cerrar Sesión',
+                  `¿Deseas cerrar tu sesión corporativa y limpiar el catálogo local de este dispositivo?${avisoExtra}`,
+                  [
+                    { text: 'Cancelar', style: 'cancel' },
+                    {
+                      text: 'Cerrar Sesión',
+                      style: 'destructive',
+                      onPress: async () => {
+                        await cerrarSesionDispositivo();
+                        setVehiculos([]);
+                        setSesionActiva(null);
+                        setMotivoRelogin(null);
+                        setVista('HOME');
+                      },
+                    },
+                  ]
+                );
+              }}
+            >
+              <Ionicons name="log-out-outline" size={20} color="#ffffff" />
+              <Text style={styles.primaryBtnText}>Cerrar Sesión en este Dispositivo</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Tarjeta de Versión y Auto-Actualización */}
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Versión de la Aplicación (Assets)</Text>
+            <Text style={styles.helperText}>
+              Versión instalada actualmente: v{versionActual}
+            </Text>
+
+            {updateRelease ? (
+              <View style={{ marginTop: 8, marginHorizontal: -14 }}>
+                <UpdateBanner
+                  release={updateRelease}
+                  versionInstalada={versionActual}
+                />
+              </View>
+            ) : null}
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, { marginTop: 14, backgroundColor: '#0369a1' }]}
+              onPress={() => revisarActualizaciones(true)}
+            >
+              <Ionicons name="cloud-download-outline" size={20} color="#ffffff" />
+              <Text style={styles.primaryBtnText}>Buscar Actualizaciones (.APK)</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Tarjeta de Servidor Easypanel */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>URL del Servidor en Easypanel o Red Local</Text>
             <Text style={styles.helperText}>
@@ -434,7 +674,7 @@ export default function App() {
               style={styles.input}
               value={inspectorInput}
               onChangeText={setInspectorInput}
-              placeholder="HERNAN OVALLES GARCIA"
+              placeholder={sesionActiva.user.nombreCompleto}
               placeholderTextColor="#64748b"
             />
 
@@ -442,7 +682,7 @@ export default function App() {
               style={[styles.primaryBtn, { marginTop: 20 }]}
               onPress={async () => {
                 await guardarServerUrl(serverUrlInput);
-                await guardarInspectorActivo(inspectorInput);
+                await guardarInspectorActivo(inspectorInput || sesionActiva.user.nombreCompleto);
                 await handleManualSync();
                 setVista('HOME');
               }}
@@ -1609,7 +1849,9 @@ export default function App() {
       {/* Encabezado Principal Responsivo */}
       <View style={styles.homeHeader}>
         <View style={styles.homeHeaderTitleWrap}>
-          <Text style={styles.brandTag}>SIFYGSA FLEET • RECEPCIÓN ACTIVA</Text>
+          <Text style={styles.brandTag} numberOfLines={1}>
+            SIFYGSA FLEET • {sesionActiva.user.nombreCompleto}
+          </Text>
           <Text style={styles.homeTitle}>Checklist Vehicular</Text>
         </View>
 
@@ -1647,6 +1889,14 @@ export default function App() {
           </TouchableOpacity>
         </View>
       </View>
+
+      {!updateOculto && updateRelease ? (
+        <UpdateBanner
+          release={updateRelease}
+          versionInstalada={versionActual}
+          onDismiss={() => setUpdateOculto(true)}
+        />
+      ) : null}
 
       {syncMsg ? (
         <View style={styles.syncStatusBar}>

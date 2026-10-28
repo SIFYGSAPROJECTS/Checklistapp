@@ -147,7 +147,11 @@ export interface ChecklistFormState {
   errorSync?: string;
 }
 
-export function crearChecklistInicial(vehiculo: VehiculoCatalogo, inspectorNombre = 'HERNAN OVALLES GARCIA'): ChecklistFormState {
+export function crearChecklistInicial(
+  vehiculo: VehiculoCatalogo,
+  inspectorNombre = '',
+  inspectorEmail = ''
+): ChecklistFormState {
   const prev = vehiculo.ultimoChecklistDatos;
   const hoy = new Date().toISOString().slice(0, 10);
   const folio = `CHK-${vehiculo.consecutivo}-${Date.now().toString().slice(-5)}`;
@@ -244,7 +248,7 @@ export function crearChecklistInicial(vehiculo: VehiculoCatalogo, inspectorNombr
     responsable: vehiculo.responsableNombre || prev?.responsable || '',
     responsableEmail: vehiculo.responsableEmail || '',
     inspector: inspectorNombre,
-    inspectorEmail: '',
+    inspectorEmail: inspectorEmail,
     firmaResponsableBase64: null,
     firmaInspectorBase64: null,
     fotos: [],
