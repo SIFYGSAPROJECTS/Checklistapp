@@ -16,3 +16,10 @@ yarn-error.*
 *.pem
 .env*.local
 *.tsbuildinfo
+
+# Package builds & Android binaries
+*.apk
+*.aab
+*.ap_
+*.dex
+
